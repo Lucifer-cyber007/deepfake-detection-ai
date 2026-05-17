@@ -1,6 +1,6 @@
 # NeuralGuard — Deepfake Detection AI
 
-An end-to-end deepfake detection web app that analyses uploaded videos (and images) frame-by-frame using a fine-tuned **EfficientNet-B3** model, then renders a forensic dashboard with an overall authenticity score, a per-frame timeline heatmap, suspicious-frame thumbnails, and live processing logs.
+An end-to-end deepfake detection web app that analyses uploaded videos (and images) frame-by-frame using an **EfficientNet-B3** model **fine-tuned on the [FaceForensics++](https://github.com/ondyari/FaceForensics) dataset**, then renders a forensic dashboard with an overall authenticity score, a per-frame timeline heatmap, suspicious-frame thumbnails, and live processing logs.
 
 ```
 ┌────────────────────┐     HTTP/JSON      ┌──────────────────────┐     PyTorch     ┌──────────────────────┐
@@ -31,7 +31,7 @@ An end-to-end deepfake detection web app that analyses uploaded videos (and imag
 | Frontend | React 19, Vite 7, plain CSS (Inter font, custom dashboard theming)  |
 | Backend  | FastAPI, Uvicorn, python-multipart                                  |
 | ML / CV  | PyTorch, torchvision, `timm` (EfficientNet-B3), OpenCV, Pillow, NumPy |
-| Model    | Custom temporal aggregator over EfficientNet-B3 features            |
+| Model    | EfficientNet-B3 fine-tuned on FaceForensics++, with a custom temporal aggregator |
 
 ---
 
@@ -56,7 +56,7 @@ deepfake-app/
 │   ├── package.json
 │   └── vite.config.js
 ├── model/
-│   └── DEEPFAKE_DETECTION_AI.pth   # Pre-trained weights (EfficientNet-B3, 1-class head)
+│   └── DEEPFAKE_DETECTION_AI.pth   # FaceForensics++ fine-tuned weights (EfficientNet-B3, 1-class head)
 ├── scratch_inspect_model.py        # Utility to peek inside the .pth checkpoint
 ├── .gitignore
 └── README.md
@@ -174,10 +174,13 @@ A score of **> 0.5** is labelled `FAKE`; otherwise `REAL`. The `heatmap` array d
 
 ## Model Details
 
+The bundled checkpoint is an **EfficientNet-B3** classifier **fine-tuned on [FaceForensics++](https://github.com/ondyari/FaceForensics)** (FF++), a large-scale benchmark of real and manipulated face videos. The app reuses those learned weights for frame-level scoring on new uploads.
+
 | Property        | Value                                                      |
 | --------------- | ---------------------------------------------------------- |
+| Training data   | [FaceForensics++](https://github.com/ondyari/FaceForensics) (fine-tuned checkpoint) |
 | Backbone        | `efficientnet_b3` (via [`timm`](https://github.com/huggingface/pytorch-image-models)) |
-| Pre-training    | Loaded as a randomized backbone; weights come from the checkpoint |
+| Pre-training    | ImageNet-style backbone; task-specific weights from FF++ fine-tuning |
 | Input size      | 300 × 300                                                  |
 | Normalisation   | ImageNet mean / std                                        |
 | Head            | `Linear(1536 → 1)` with sigmoid                            |
@@ -226,6 +229,7 @@ This project is released for academic and research purposes. Add a license file 
 
 ## Acknowledgements
 
+- [FaceForensics++](https://github.com/ondyari/FaceForensics) for the benchmark dataset used to fine-tune the detection model.
 - [PyTorch Image Models (`timm`)](https://github.com/huggingface/pytorch-image-models) for the EfficientNet-B3 backbone.
 - [FastAPI](https://fastapi.tiangolo.com/) for the snappy backend.
 - [Vite](https://vitejs.dev/) + [React](https://react.dev/) for the frontend.
