@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
+import JSZip from 'jszip'
 import './index.css'
 
 function App() {
@@ -7,6 +8,7 @@ function App() {
   const [loading, setLoading] = useState(false)
   const [analysisData, setAnalysisData] = useState(null)
   const [logs, setLogs] = useState([])
+  const [exporting, setExporting] = useState(false)
   const fileInputRef = useRef(null)
   const logEndRef = useRef(null)
 
@@ -73,6 +75,145 @@ function App() {
     return '#10b981' // Success
   }
 
+  const getBaseName = () => {
+    if (!file) return 'analysis'
+    return file.name.replace(/\.[^/.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_')
+  }
+
+  const classify = (score) => {
+    if (score > 0.7) return 'DEEPFAKE'
+    if (score > 0.4) return 'SUSPICIOUS'
+    return 'REAL'
+  }
+
+  const buildCsvReport = () => {
+    if (!analysisData) return ''
+    const { overall_score, label, confidence, heatmap = [], suspicious_frames = [] } = analysisData
+
+    const suspectTimestamps = new Set(
+      suspicious_frames.map((f) => Number(f.timestamp).toFixed(4))
+    )
+
+    const lines = []
+    lines.push('NeuralGuard Deepfake Detection Report')
+    lines.push(`Source File,${file ? file.name : 'unknown'}`)
+    lines.push(`Generated At,${new Date().toISOString()}`)
+    lines.push(`Overall Score,${overall_score?.toFixed(4) ?? ''}`)
+    lines.push(`Verdict,${label ?? ''}`)
+    lines.push(`Confidence,${confidence?.toFixed(4) ?? ''}`)
+    lines.push(`Total Frames Sampled,${heatmap.length}`)
+    lines.push(`Deepfake/Suspicious Frames,${suspicious_frames.length}`)
+    lines.push('')
+    lines.push('Frame Index,Timestamp (s),Deepfake Score,Classification,Flagged As Suspicious')
+
+    heatmap.forEach((point, i) => {
+      const tsKey = Number(point.ts).toFixed(4)
+      const flagged = suspectTimestamps.has(tsKey) ? 'YES' : 'NO'
+      lines.push(
+        `${i + 1},${Number(point.ts).toFixed(3)},${Number(point.val).toFixed(4)},${classify(point.val)},${flagged}`
+      )
+    })
+
+    lines.push('')
+    lines.push('Deepfake Frame Details')
+    lines.push('Index,Timestamp (s),Score,Classification,Thumbnail File')
+    suspicious_frames.forEach((f, i) => {
+      const fname = `frame_${String(i + 1).padStart(3, '0')}_t${Number(f.timestamp).toFixed(2)}s.jpg`
+      lines.push(
+        `${i + 1},${Number(f.timestamp).toFixed(3)},${Number(f.score).toFixed(4)},${classify(f.score)},${fname}`
+      )
+    })
+
+    return lines.join('\r\n')
+  }
+
+  const downloadBlob = (blob, filename) => {
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  }
+
+  const exportCSV = () => {
+    if (!analysisData) {
+      addLog('Export CSV failed: no analysis data. Run ANALYZE first.')
+      return
+    }
+    try {
+      addLog('Compiling CSV deepfake report...')
+      const csv = buildCsvReport()
+      const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' })
+      downloadBlob(blob, `${getBaseName()}_report.csv`)
+      addLog('CSV report downloaded.')
+    } catch (err) {
+      console.error(err)
+      addLog('Export CSV failed: ' + err.message)
+    }
+  }
+
+  const base64ToUint8Array = (b64) => {
+    const binary = atob(b64)
+    const bytes = new Uint8Array(binary.length)
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+    return bytes
+  }
+
+  const exportZip = async () => {
+    if (!analysisData) {
+      addLog('Export ZIP failed: no analysis data. Run ANALYZE first.')
+      return
+    }
+    setExporting(true)
+    try {
+      addLog('Building ZIP package...')
+      const zip = new JSZip()
+      const base = getBaseName()
+
+      const csv = buildCsvReport()
+      zip.file('report.csv', '\ufeff' + csv)
+
+      const { overall_score, label, confidence, heatmap = [], suspicious_frames = [] } = analysisData
+      const summary = [
+        'NeuralGuard Deepfake Detection - Summary Report',
+        '================================================',
+        `Source File           : ${file ? file.name : 'unknown'}`,
+        `Generated At          : ${new Date().toISOString()}`,
+        `Verdict               : ${label ?? 'N/A'}`,
+        `Overall Score         : ${overall_score?.toFixed(4) ?? 'N/A'}`,
+        `Confidence            : ${confidence?.toFixed(4) ?? 'N/A'}`,
+        `Total Frames Sampled  : ${heatmap.length}`,
+        `Deepfake Frames Found : ${suspicious_frames.length}`,
+        '',
+        'See report.csv for full per-frame data.',
+        'See /deepfake_frames/ for extracted suspicious frame images.',
+      ].join('\r\n')
+      zip.file('report.txt', summary)
+
+      const framesFolder = zip.folder('deepfake_frames')
+      let savedFrames = 0
+      suspicious_frames.forEach((f, i) => {
+        if (!f.thumbnail) return
+        const fname = `frame_${String(i + 1).padStart(3, '0')}_t${Number(f.timestamp).toFixed(2)}s.jpg`
+        framesFolder.file(fname, base64ToUint8Array(f.thumbnail), { binary: true })
+        savedFrames++
+      })
+
+      addLog(`Packaged ${savedFrames} deepfake frame image(s).`)
+      const blob = await zip.generateAsync({ type: 'blob' })
+      downloadBlob(blob, `${base}_report.zip`)
+      addLog('ZIP report downloaded.')
+    } catch (err) {
+      console.error(err)
+      addLog('Export ZIP failed: ' + err.message)
+    } finally {
+      setExporting(false)
+    }
+  }
+
   return (
     <div className="dashboard">
       {/* Sidebar */}
@@ -105,8 +246,24 @@ function App() {
             {loading ? 'ANALYZING...' : 'ANALYZE'}
           </button>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', marginTop: '0.5rem' }}>
-            <button className="btn btn-secondary" style={{ fontSize: '0.7rem' }}>Export CSV</button>
-            <button className="btn btn-secondary" style={{ fontSize: '0.7rem' }}>Export ZIP</button>
+            <button
+              className="btn btn-secondary"
+              style={{ fontSize: '0.7rem' }}
+              onClick={exportCSV}
+              disabled={!analysisData || loading || exporting}
+              title={!analysisData ? 'Run ANALYZE first to enable export' : 'Download CSV deepfake report'}
+            >
+              Export CSV
+            </button>
+            <button
+              className="btn btn-secondary"
+              style={{ fontSize: '0.7rem' }}
+              onClick={exportZip}
+              disabled={!analysisData || loading || exporting}
+              title={!analysisData ? 'Run ANALYZE first to enable export' : 'Download ZIP with deepfake frames + report'}
+            >
+              {exporting ? 'PACKAGING...' : 'Export ZIP'}
+            </button>
           </div>
         </section>
 
